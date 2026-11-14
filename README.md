@@ -51,7 +51,7 @@ Todas las fechas y horas del producto usan America/Mexico_City.
 | --- | --- |
 | Atención | Lunes a viernes de 10:00 a 19:00; sábado de 11:00 a 15:00; domingo cerrado. |
 | Descansos | Sin descanso programado. |
-| Duración | 45 minutos; la cita completa debe terminar dentro del horario de atención. |
+| Duración | 45 minutos de atención y 15 de margen. Los bloques son de una hora, empiezan en punto y terminan dentro del horario de atención. |
 | Disponibilidad | No permitir citas ni reservas superpuestas; admitir bloqueos del dentista. |
 | Anticipación | Las reservas con anticipo se permiten únicamente para citas a más de 6 horas de distancia. |
 | Retención | El horario queda reservado temporalmente durante 6 horas desde que se crea la reserva pendiente de pago. |
