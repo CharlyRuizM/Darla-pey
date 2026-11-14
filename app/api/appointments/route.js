@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { readBookingFlowToken } from '../../../lib/whatsapp-flow-token.mjs';
 
 export async function POST(request) {
   const { APPOINTMENTS_API_TOKEN, PEY_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
@@ -35,6 +36,8 @@ export async function POST(request) {
     signal: AbortSignal.timeout(10000),
   });
 
+  const flowSession = readBookingFlowToken(input?.flowToken, APPOINTMENTS_API_TOKEN);
+  const whatsappPhone = flowSession?.reservationId === id ? '52' + flowSession.phone : null;
   let transactionId;
   const useLink = paymentMethod === "link";
   try {
@@ -69,6 +72,7 @@ export async function POST(request) {
     if (typeof transactionId !== 'string' || !transactionId) throw new Error('missing_transaction');
 
     const linked = await database(`/rest/v1/appointments?id=eq.${id}&pey_transaction_id=is.null`, 'PATCH', {
+      ...(whatsappPhone ? { whatsapp_phone: whatsappPhone } : {}),
       pey_transaction_id: useLink ? `link:${transactionId}` : transactionId,
     });
     if (!linked.ok || (await linked.json()).length !== 1) throw new Error('link_failed');

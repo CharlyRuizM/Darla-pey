@@ -189,3 +189,9 @@ Avance del 14 de noviembre de 2026: API key creada y cuenta receptora preautoriz
 El receptor inicial de pey vive en `/api/webhooks/pey` y usa `PEY_WEBHOOK_SECRET`. Se verificó localmente la firma, el rechazo de cuerpo alterado y la ventana de tiempo. Los eventos autenticados se guardan en Supabase con una clave única por webhook. El receptor responde 204 si Supabase aceptó el evento y 503 si no pudo guardarlo. Falta aplicar la migración y verificar contra una instancia real. Aún falta crear el proyecto Next.js, desplegar en Cloudflare y registrar la URL en pey.
 
 Para activar el almacenamiento, aplicar la migración de `supabase/migrations` y configurar `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `PEY_WEBHOOK_SECRET` en el servidor. La clave de rol de servicio es exclusiva del backend.
+
+## Acceso para jueces
+
+La portada abre WhatsApp con el mensaje «Quiero agendar una valoración dental» al número de demo terminado en 8284. Falta conectar ese mensaje entrante a una respuesta automática con el Flow publicado. El script de invitación existente usa modo borrador y requiere una sesión de mensajería habilitada para el destinatario.
+
+El panel todavía simula la propuesta. Para habilitar el envío real, el backend debe emitir una invitación vinculada al destinatario, horario y monto de la propuesta. Si el consultorio inicia la conversación fuera de la ventana de atención de WhatsApp, usar una plantilla aprobada. Restringir el envío a operadores del panel y ofrecer a los jueces acceso controlado para probar con su propio número. La demo cobra $0.01 MXN.
