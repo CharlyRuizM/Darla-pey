@@ -1,6 +1,15 @@
-# Agenda dental por WhatsApp con anticipos CoDi
+# Darla · Agenda dental por WhatsApp
 
-Documento de contexto y decisiones acordadas con el usuario. Actualizado el 14 de noviembre de 2026. Leerlo antes de continuar el diseño o la implementación y mantenerlo al día cuando cambien las decisiones.
+Darla se desarrolló durante el Hackatón México. Permite apartar una valoración dental por WhatsApp y confirma la cita cuando pey verifica el pago del anticipo con CoDi.
+
+[Demo interactiva](https://pey-hackathon.ingecarlosrm.workers.dev/) · [Panel y agenda en vivo](https://pey-hackathon.ingecarlosrm.workers.dev/panel) · [Video de la demo](https://www.youtube.com/watch?v=jNzOk9k3iLE) · [Cómo probar](#cómo-probar)
+
+## Cómo probar
+
+1. Abre la [demo](https://pey-hackathon.ingecarlosrm.workers.dev/) y toca **Abrir WhatsApp**. Envía el mensaje preparado al consultorio terminado en **8284**.
+2. Abre el formulario que llega al chat, elige fecha y hora y selecciona cómo pagar el anticipo.
+3. Autoriza el pago de **$0.01 MXN** con CoDi. Es un pago real y no se devuelve.
+4. Revisa el aviso de confirmación en WhatsApp y abre el [panel](https://pey-hackathon.ingecarlosrm.workers.dev/panel). En **Agenda** o **Historial**, busca la cita por su horario y los últimos cuatro dígitos de tu número. Cuando pey confirme el pago, verás **Confirmada** y **Pagado**.
 
 ## Objetivo
 
@@ -183,22 +192,3 @@ Cerrar cada etapa con su prueba de aceptación antes de depender de ella para la
 | 4. Kapso y WhatsApp | Inventariar la configuración del 8284. Integrar el Flow de valoración, la invitación del consultorio y la confirmación al pagar. | Un paciente puede iniciar el flujo en WhatsApp, pagar y ver su cita confirmada también en la agenda. |
 | 5. Recordatorios y cambios | Configurar Cron, plantillas y cambios de cita. Aplicar el recordatorio a las 4 h, el vencimiento a las 6 h y el recordatorio opcional de cita. | Se verifican los cambios de estado y los mensajes sin duplicados. Un pago tardío queda en revisión. |
 | 6. Entrega | Ejecutar el flujo completo, preparar instrucciones, declarar código previo y grabar la demo. | El video de menos de 3 minutos muestra WhatsApp, autorización bancaria y cita confirmada. |
-
-## Cómo probar
-
-1. Abre la [demo pública](https://pey-hackathon.ingecarlosrm.workers.dev/) y pulsa **Abrir WhatsApp**. Envía el mensaje preparado al número del consultorio terminado en **8284**.
-2. Abre el formulario de WhatsApp, elige una fecha y hora y solicita un cobro por push o por link.
-3. Paga el anticipo de **$0.01 MXN** con CoDi. Es un pago real y no se devuelve.
-4. Revisa el cambio de estado en la [agenda pública](https://pey-hackathon.ingecarlosrm.workers.dev/panel) y espera el aviso de confirmación en WhatsApp. La agenda muestra únicamente un teléfono enmascarado cuando está disponible.
-
-Se verificaron pagos CoDi de producción por push y link, la recepción de sus webhooks y la conciliación de citas en Supabase. La agenda consulta esas citas en tiempo real. Las acciones sin integración aparecen como **Próximamente**.
-
-## Código previo
-
-El número de WhatsApp y el proyecto Kapso ya existían antes del hackatón. El Flow dental, el código de reserva y pago, la conciliación, las notificaciones y el panel de este repositorio se prepararon para la demo.
-
-### Invitaciones desde el consultorio
-
-En la agenda pública, abre **Nueva cita**, elige un horario e ingresa tu propio número. Selecciona el anticipo. El valor predeterminado para la prueba es **$0.01 MXN**; también puedes elegir $100, $200, $300 u otro monto de hasta $600. El pago es real. La plantilla aprobada permite recibir la propuesta sin haber escrito al consultorio. Si la plantilla deja de estar disponible, el mensaje interactivo requiere una conversación reciente.
-
-La propuesta aparece en la agenda cuando Kapso acepta el envío. El horario se reserva al aceptar y la cita se confirma al recibir el pago verificado por pey.
