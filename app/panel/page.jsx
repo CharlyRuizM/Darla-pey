@@ -1,16 +1,24 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import {
-  consultorio, pacientes as pacientesDemo, citas as citasDemo,
-  bloqueos, cobrosIndependientes as cobrosDemo, horario,
-} from '../../lib/demo-data.mjs';
-import {
-  diasDeAtencion, hoyMx, slotsDelDia, fechaLarga, fechaCorta, mxn, telefonoBonito,
-} from '../../lib/agenda.mjs';
+import { getCountries, getCountryCallingCode, parsePhoneNumberFromString } from 'libphonenumber-js';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { consultorio, horario } from '../../lib/demo-data.mjs';
+import { diasDeAtencion, hoyMx, slotsDelDia, fechaLarga, fechaCorta, mxn } from '../../lib/agenda.mjs';
+import { panelAppointments } from '../../lib/panel-agenda.mjs';
+
+const regionNames = new Intl.DisplayNames('es-MX', { type: 'region' });
+const countries = getCountries().map((id) => ({
+  id, name: regionNames.of(id), code: '+' + getCountryCallingCode(id),
+})).sort((a, b) => a.name.localeCompare(b.name, 'es-MX'));
+const normalized = (value) => value.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
 
 const ESTADO_CITA = {
   propuesta: { texto: 'Propuesta enviada', tono: 'gris' },
+  aceptada: { texto: 'Propuesta aceptada', tono: 'gris' },
+  rechazada: { texto: 'Propuesta rechazada', tono: 'gris' },
+  otro_horario: { texto: 'Pidió otro horario', tono: 'gris' },
+  envio_fallido: { texto: 'Envío sin confirmar', tono: 'rojo' },
   pendiente_pago: { texto: 'Esperando anticipo', tono: 'ambar' },
   confirmada: { texto: 'Confirmada', tono: 'verde' },
   atendida: { texto: 'Atendida', tono: 'azul' },
@@ -31,32 +39,77 @@ const ESTADO_PAGO = {
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 function Chip({ estado, mapa }) {
+  const anterior = useRef(estado);
+  const elemento = useRef(null);
+  useEffect(() => {
+    const cambio = anterior.current !== estado;
+    anterior.current = estado;
+    if (!cambio || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const animation = elemento.current?.animate(
+      [{ transform: "scale(.94)", opacity: .65 }, { transform: "scale(1.06)", opacity: 1 }, { transform: "scale(1)", opacity: 1 }],
+      { duration: 340, easing: "ease-out" },
+    );
+    return () => animation?.cancel();
+  }, [estado]);
   const e = mapa[estado] || { texto: estado, tono: 'gris' };
-  return <span className={`chip chip-${e.tono}`}>{e.texto}</span>;
+  return <span ref={elemento} className={`chip chip-${e.tono}`}>{e.texto}</span>;
 }
 
 export default function Panel() {
   const dias = useMemo(() => diasDeAtencion(6), []);
   const [vista, setVista] = useState('agenda');
   const [diaIdx, setDiaIdx] = useState(0);
-  const [citas, setCitas] = useState(citasDemo);
-  const [cobros, setCobros] = useState(cobrosDemo);
-  const [pacientes, setPacientes] = useState(pacientesDemo);
+  const [rows, setRows] = useState([]);
+  const [now, setNow] = useState(Date.now);
+  const [error, setError] = useState(false);
   const [seleccion, setSeleccion] = useState(null);
   const [modal, setModal] = useState(null);
+  const [sent, setSent] = useState(null);
+  const [sentCharge, setSentCharge] = useState(false);
+  const from = dias[0].toISOString().slice(0, 10);
+  const to = dias.at(-1).toISOString().slice(0, 10);
 
+  useEffect(() => {
+    let active = true;
+    let inFlight;
+    async function actualizar() {
+      if (!active || document.visibilityState !== 'visible' || inFlight) return;
+      setNow(Date.now());
+      const controller = new AbortController();
+      inFlight = controller;
+      try {
+        const response = await fetch(`/api/panel/agenda?from=${from}&to=${to}`, {
+          cache: 'no-store', signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('agenda');
+        const data = await response.json();
+        if (active) { setRows(data.appointments); setError(false); }
+      } catch {
+        if (active) setError(true);
+      } finally {
+        inFlight = undefined;
+      }
+    }
+    actualizar();
+    const interval = setInterval(actualizar, 5000);
+    document.addEventListener('visibilitychange', actualizar);
+    return () => {
+      active = false;
+      inFlight?.abort();
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', actualizar);
+    };
+  }, [from, to]);
+
+  const citas = panelAppointments(rows, dias, now);
+  const pacientes = citas.map((cita) => cita.paciente);
   const paciente = (id) => pacientes.find((p) => p.id === id);
-  const actualizarCita = (id, cambios) =>
-    setCitas((cs) => cs.map((c) => (c.id === id ? { ...c, ...cambios } : c)));
-
-  const citaSel = seleccion && citas.find((c) => c.id === seleccion);
-
-  const hoy = citas.filter((c) => c.dia === 0 && !['cancelada', 'vencida'].includes(c.estadoCita));
-  const pendientes = citas.filter((c) => ['pendiente', 'esperando'].includes(c.estadoPago)).length
-    + cobros.filter((k) => ['pendiente', 'esperando'].includes(k.estadoPago)).length;
-  const porAtender = citas.filter((c) => ['revision', 'devolucion_pendiente'].includes(c.estadoPago)).length;
-  const cobradoHoy = citas.filter((c) => c.dia === 0 && c.estadoPago === 'pagado').reduce((s, c) => s + c.anticipo, 0)
-    + cobros.filter((k) => k.fecha === 0 && k.estadoPago === 'pagado').reduce((s, k) => s + k.monto, 0);
+  const citaSel = citas.find((c) => c.id === seleccion);
+  const citasDia = citas.filter((c) => c.dia === diaIdx);
+  const hoy = citasDia.filter((c) => !['cancelada', 'vencida'].includes(c.estadoCita));
+  const pendientes = citasDia.filter((c) => c.estadoPago === 'pendiente').length;
+  const porAtender = 0;
+  const cobradoHoy = citasDia.filter((c) => c.estadoCita === 'confirmada').reduce((s, c) => s + c.anticipo, 0);
 
   return (
     <div className="shell">
@@ -70,6 +123,7 @@ export default function Panel() {
         </div>
         {[
           ['agenda', 'Agenda', '📅'],
+          ['historial', 'Historial', '🗂️'],
           ['cobros', 'Cobros', '💸'],
           ['pacientes', 'Pacientes', '👥'],
           ['ajustes', 'Ajustes', '⚙️'],
@@ -79,10 +133,16 @@ export default function Panel() {
             {id === 'cobros' && porAtender > 0 && <span className="badge">{porAtender}</span>}
           </button>
         ))}
-        <p className="aviso-demo">Datos de ejemplo. Los cobros reales se confirman con el webhook de pey.</p>
+        <p className="aviso-demo">Los cobros se confirman con el webhook de pey.</p>
       </aside>
 
       <main className="contenido">
+        {sent && <div className="proposal-success" role="status">
+          <span><strong>{sentCharge ? 'Cobro enviado por WhatsApp' : 'Propuesta enviada por WhatsApp'}</strong><br />
+          Al número {sent}. {sentCharge ? 'El pago está pendiente.' : 'La cita queda pendiente de aceptación.'}</span>
+          <button type="button" className="btn secundario chico" onClick={() => setSent(null)}>Cerrar</button>
+        </div>}
+        {error && <p className="muted pequeño" role="status">No se pudo actualizar la agenda</p>}
         {vista === 'agenda' && (
           <>
             <header className="encabezado">
@@ -91,13 +151,13 @@ export default function Panel() {
                 <p className="sub">{fechaLarga(dias[diaIdx])} · hora de la Ciudad de México</p>
               </div>
               <div className="acciones">
-                <button className="btn secundario" onClick={() => setModal({ tipo: 'cobro' })}>Nuevo cobro</button>
-                <button className="btn primario" onClick={() => setModal({ tipo: 'cita', dia: diaIdx })}>Nueva cita</button>
+                <button className="btn secundario" onClick={() => setModal({ cobro: true })}>Nuevo cobro</button>
+                <button className="btn primario" onClick={() => setModal({ dia: diaIdx })}>Nueva cita</button>
               </div>
             </header>
 
             <section className="stats">
-              <div className="stat"><span>Citas {dias[0].getTime() === hoyMx().getTime() ? 'hoy' : fechaCorta(dias[0])}</span><strong>{hoy.length}</strong></div>
+              <div className="stat"><span>Citas {dias[diaIdx].getTime() === hoyMx().getTime() ? 'hoy' : fechaCorta(dias[diaIdx])}</span><strong>{hoy.length}</strong></div>
               <div className="stat"><span>Cobrado</span><strong>{mxn(cobradoHoy)}</strong></div>
               <div className="stat"><span>Pagos pendientes</span><strong>{pendientes}</strong></div>
               <div className={`stat ${porAtender ? 'stat-alerta' : ''}`}><span>Requieren atención</span><strong>{porAtender}</strong></div>
@@ -114,9 +174,8 @@ export default function Panel() {
 
             <ol className="slots">
               {slotsDelDia(dias[diaIdx]).map((s, idx) => {
-                const cita = citas.find((c) => c.dia === diaIdx && c.slot === idx && !['cancelada', 'vencida'].includes(c.estadoCita));
-                const bloqueo = bloqueos.find((b) => b.dia === diaIdx && b.slot === idx);
-                const historico = citas.filter((c) => c.dia === diaIdx && c.slot === idx && ['cancelada', 'vencida'].includes(c.estadoCita));
+                const cita = citas.find((c) => c.dia === diaIdx && c.slot === idx && !['cancelada', 'vencida', 'propuesta'].includes(c.estadoCita));
+                const historico = citas.filter((c) => c.dia === diaIdx && c.slot === idx && ['cancelada', 'vencida', 'propuesta'].includes(c.estadoCita));
                 return (
                   <li key={idx} className="slot">
                     <time>{s.inicio}<small>{s.fin}</small></time>
@@ -135,10 +194,8 @@ export default function Panel() {
                             </span>
                           </div>
                         </button>
-                      ) : bloqueo ? (
-                        <div className="bloqueo">{bloqueo.motivo}</div>
                       ) : (
-                        <button className="libre" onClick={() => setModal({ tipo: 'cita', dia: diaIdx, slot: idx })}>
+                        <button className="libre" onClick={() => setModal({ dia: diaIdx, slot: idx })}>
                           + Agendar a las {s.inicio}
                         </button>
                       )}
@@ -155,68 +212,258 @@ export default function Panel() {
           </>
         )}
 
-        {vista === 'cobros' && (
-          <Cobros citas={citas} cobros={cobros} paciente={paciente} dias={dias}
-            abrirCita={setSeleccion} nuevo={() => setModal({ tipo: 'cobro' })} />
-        )}
-
-        {vista === 'pacientes' && (
-          <Pacientes pacientes={pacientes} citas={citas} cobros={cobros}
-            cobrar={(p) => setModal({ tipo: 'cobro', pacienteId: p.id })}
-            agendar={(p) => setModal({ tipo: 'cita', dia: 0, pacienteId: p.id })} />
-        )}
-
+        {vista === 'historial' && <Historial />}
+        {vista === 'cobros' && <Cobros citas={citas} paciente={paciente} dias={dias} abrirCita={setSeleccion} nuevo={() => setModal({ cobro: true })} />}
+        {vista === 'pacientes' && <Pacientes pacientes={pacientes} citas={citas} />}
         {vista === 'ajustes' && <Ajustes />}
       </main>
 
+      {modal?.cobro && <ModalCobroProcedimiento cerrar={() => setModal(null)} enviado={(maskedPhone) => {
+        setSentCharge(true);
+        setSent(maskedPhone);
+        setModal(null);
+        setVista('cobros');
+      }} />}
+      {modal && !modal.cobro && <ModalPropuesta dias={dias} initialDay={modal.dia}
+        initialSlot={modal.slot} citas={citas} cerrar={() => setModal(null)} enviada={(row) => {
+          setRows((actuales) => [...actuales.filter((c) => c.id !== row.id), row]);
+          setSentCharge(false);
+          setSent(row.whatsapp_phone);
+          setModal(null);
+        }} />}
       {citaSel && (
-        <Detalle cita={citaSel} paciente={paciente(citaSel.pacienteId)} dia={dias[citaSel.dia]}
+        <Detalle cita={citaSel} paciente={citaSel.paciente} dia={dias[citaSel.dia]}
           slot={slotsDelDia(dias[citaSel.dia])[citaSel.slot]}
-          cerrar={() => setSeleccion(null)}
-          actualizar={(cambios) => actualizarCita(citaSel.id, cambios)}
-          cobrarSaldo={() => setModal({
-            tipo: 'cobro', pacienteId: citaSel.pacienteId, citaId: citaSel.id,
-            concepto: `Saldo ${consultorio.servicio.toLowerCase()}`,
-            monto: consultorio.precioServicio - citaSel.anticipo,
-          })} />
-      )}
-
-      {modal?.tipo === 'cobro' && (
-        <ModalCobro {...modal} pacientes={pacientes} cerrar={() => setModal(null)}
-          enviar={(cobro) => {
-            setCobros((ks) => [...ks, { id: `k${Date.now()}`, fecha: 0, estadoPago: 'esperando', ...cobro }]);
-            if (cobro.citaId) actualizarCita(cobro.citaId, { saldoSolicitado: true });
-          }} />
-      )}
-
-      {modal?.tipo === 'cita' && (
-        <ModalCita {...modal} dias={dias} citas={citas} pacientes={pacientes} cerrar={() => setModal(null)}
-          crear={({ paciente: p, ...cita }) => {
-            let pacienteId = p.id;
-            if (!pacienteId) {
-              pacienteId = `p${Date.now()}`;
-              setPacientes((ps) => [...ps, { ...p, id: pacienteId }]);
-            }
-            setCitas((cs) => [...cs, {
-              id: `c${Date.now()}`, pacienteId, estadoCita: 'propuesta', estadoPago: 'sin_anticipo', origen: 'consultorio', ...cita,
-            }]);
-            setModal(null);
-          }} />
+          cerrar={() => setSeleccion(null)} />
       )}
     </div>
   );
 }
 
-function Detalle({ cita, paciente, dia, slot, cerrar, actualizar, cobrarSaldo }) {
+function ModalPropuesta({ dias, initialDay, initialSlot, citas, cerrar, enviada }) {
+  const [dia, setDia] = useState(initialDay);
+  const [slot, setSlot] = useState(initialSlot ?? null);
+  const [phone, setPhone] = useState('');
+  const [country, setCountry] = useState('MX');
+  const [countryOpen, setCountryOpen] = useState(false);
+  const [countryQuery, setCountryQuery] = useState('');
+  const selectedCountry = countries.find(({ id }) => id === country);
+  const countryMatches = countries.filter(({ name, code, id }) =>
+    normalized(`${name} ${code} ${id}`).includes(normalized(countryQuery.trim())));
+  const parsedPhone = parsePhoneNumberFromString(phone, { defaultCountry: country, extract: false });
+  const validPhone = parsedPhone?.isPossible() && (phone.trim().startsWith('+') || parsedPhone.countryCallingCode === selectedCountry.code.slice(1));
+  const [preset, setPreset] = useState('0.01');
+  const [custom, setCustom] = useState('');
+  const deposit = (preset === 'otro' ? custom.trim() : preset).replace(',', '.');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const fecha = dias[dia].toISOString().slice(0, 10);
+  const horarios = slotsDelDia(dias[dia]);
+  const startsAt = horarios[slot] && `${fecha}T${horarios[slot].inicio}:00-06:00`;
+  const disponible = (i) => Date.parse(`${fecha}T${horarios[i].inicio}:00-06:00`) > Date.now() + 21600000
+    && !citas.some((c) => c.dia === dia && c.slot === i && ['confirmada', 'pendiente_pago'].includes(c.estadoCita));
+  const cents = Math.round(Number(deposit) * 100);
+  const ready = validPhone && /^\d+(\.\d{1,2})?$/.test(deposit)
+    && cents >= 1 && cents <= consultorio.precioServicio * 100 && !!startsAt && disponible(slot);
+  async function enviar(e) {
+    e.preventDefault();
+    if (!ready || busy) return;
+    setBusy(true); setError('');
+    try {
+      const response = await fetch('/api/panel/invitations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: parsedPhone.number, startsAt, depositCents: cents, consent: true }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setError({
+          wait_before_resending: 'Ya hay una propuesta pendiente para ese número y horario. Revisa WhatsApp o elige otro horario.',
+          slot_unavailable: 'Ese horario ya no está disponible. Elige otro.',
+          contact_window_closed: 'Abre WhatsApp desde la portada y escribe al consultorio con el número que ingresaste.',
+        }[result.error] || 'No pudimos verificar el envío. Revisa el chat antes de reintentar.');
+        return;
+      }
+      const last4 = parsedPhone.number.slice(-4);
+      enviada({ id: result.id, status: 'invited', starts_at: startsAt, deposit_cents: cents,
+        patient_name: `Paciente ••${last4}`, whatsapp_phone: `•••• ${last4}` });
+    } catch {
+      setError('No pudimos verificar el envío. Revisa el chat antes de reintentar.');
+    } finally { setBusy(false); }
+  }
+  return <div className="capa" onClick={busy ? undefined : cerrar}>
+    <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={enviar}>
+      <button type="button" className="cerrar" onClick={cerrar} disabled={busy} aria-label="Cerrar">×</button>
+      <h2>Nueva cita · {consultorio.servicio}</h2>
+      <div>
+        <label htmlFor="proposal-phone">WhatsApp del paciente</label>
+        <div className="proposal-phone-row">
+          <button type="button" className="btn secundario" aria-expanded={countryOpen}
+            aria-controls="proposal-countries" onClick={() => { setCountryOpen(!countryOpen); setCountryQuery(''); }}>
+            {selectedCountry.name} {selectedCountry.code} ▾
+          </button>
+          <input id="proposal-phone" type="tel" autoComplete="tel-national" value={phone}
+            placeholder={country === 'MX' ? '55 1234 5678' : 'Número de WhatsApp'} onChange={(e) => setPhone(e.target.value)} />
+        </div>
+        {countryOpen && <div id="proposal-countries" className="proposal-countries"
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setCountryOpen(false); } }}>
+          <input autoFocus value={countryQuery} aria-label="Buscar país o código" placeholder="Buscar país o código"
+            onChange={(e) => setCountryQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
+          <ul>{countryMatches.map((item) => <li key={item.id}>
+            <button type="button" className="resultado" onClick={() => { setCountry(item.id); setCountryOpen(false); }}>
+              {item.name} <span>{item.code}</span>
+            </button>
+          </li>)}</ul>
+          {!countryMatches.length && <p className="muted pequeño">No encontramos ese país o código.</p>}
+        </div>}
+        {phone.trim() && !validPhone && <p className="muted pequeño">Revisa el número o selecciona su país.</p>}
+      </div>
+      <label>Día</label>
+      <div className="opciones">{dias.map((date, i) =>
+        <button type="button" key={i} className={`opcion ${dia === i ? 'activo' : ''}`} onClick={() => { setDia(i); setSlot(null); }}>{fechaCorta(date)}</button>)}</div>
+      <label>Horario (45 min)</label>
+      <div className="opciones">{horarios.map(({ inicio }, i) =>
+        <button type="button" key={inicio} disabled={!disponible(i)} className={`opcion ${slot === i ? 'activo' : ''}`} onClick={() => setSlot(i)}>{inicio}</button>)}</div>
+      <label>Anticipo
+        <select value={preset} onChange={(e) => setPreset(e.target.value)}>
+          <option value="0.01">$0.01 MXN · Demo</option>
+          {consultorio.anticipos.map((amount) => <option key={amount} value={amount}>{mxn(amount)} MXN</option>)}
+          <option value="otro">Otro monto</option>
+        </select>
+      </label>
+      {preset === 'otro' && <label>Monto en MXN
+        <input type="text" inputMode="decimal" placeholder="Ej. 150.00" value={custom} onChange={(e) => setCustom(e.target.value)} />
+        <small>De $0.01 a {mxn(consultorio.precioServicio)} MXN.</small>
+      </label>}
+      {error && <p role="alert">{error}</p>}
+      <button className="btn primario grande" disabled={!ready || busy}>{busy ? 'Enviando…' : 'Enviar propuesta por WhatsApp'}</button>
+      <p className="muted pequeño">Envía la propuesta a tu número o al de un paciente que haya autorizado recibirla. El anticipo solo se solicita cuando el paciente acepta.</p>
+    </form>
+  </div>;
+}
+
+function PanelLateral({ cerrar, children }) {
+  return <div className="capa" onClick={cerrar}>
+    <aside className="panel-lateral" role="dialog" aria-label="Detalle de la cita" onClick={(e) => e.stopPropagation()}>
+      <button className="cerrar" onClick={cerrar} aria-label="Cerrar">×</button>
+      {children}
+    </aside>
+  </div>;
+}
+
+const historyDate = new Intl.DateTimeFormat('es-MX', {
+  timeZone: 'America/Mexico_City', dateStyle: 'medium', timeStyle: 'short',
+});
+
+const historyFilters = [
+  ['all', 'Todas'], ['confirmed', 'Confirmadas'], ['pending', 'Esperando pago'],
+  ['closed', 'Vencidas o canceladas'], ['proposals', 'Propuestas'],
+];
+
+function Historial() {
+  const [filter, setFilter] = useState('all');
+  const [pages, setPages] = useState(1);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let inFlight = false;
+    async function load() {
+      if (controller.signal.aborted || inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      try {
+        const entries = [];
+        let cursor;
+        let hasInvitations = false;
+        for (let page = 0; page < pages; page++) {
+          const query = new URLSearchParams({ status: filter });
+          if (cursor) query.set('cursor', cursor);
+          const response = await fetch('/api/panel/history?' + query, {
+            cache: 'no-store', signal: controller.signal,
+          });
+          if (!response.ok) throw new Error('history');
+          const result = await response.json();
+          entries.push(...result.entries);
+          cursor = result.nextCursor;
+          hasInvitations = result.hasInvitations;
+          if (!cursor) break;
+        }
+        if (controller.signal.aborted) return;
+        setData({ entries, cursor, hasInvitations, filter });
+        setSelected((prior) => prior && (entries.find(({ key }) => key === prior.key) || prior));
+        setError(false);
+      } catch {
+        if (!controller.signal.aborted) setError(true);
+      } finally {
+        inFlight = false;
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    load();
+    const timer = setInterval(load, 5000);
+    document.addEventListener('visibilitychange', load);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', load);
+    };
+  }, [filter, pages]);
+
+  const entries = data?.filter === filter ? data.entries : [];
+  return <>
+    <header className="encabezado">
+      <div><h1>Historial</h1><p className="sub">Citas y propuestas por WhatsApp · hora de la Ciudad de México</p></div>
+    </header>
+    <nav className="filtros" aria-label="Filtrar historial">
+      {historyFilters.filter(([id]) => id !== 'proposals' || data?.hasInvitations).map(([id, label]) =>
+        <button key={id} className={`filtro ${id === filter ? 'activo' : ''}`} aria-pressed={id === filter}
+          onClick={() => { if (id !== filter) { setLoading(true); setError(false); setFilter(id); setPages(1); } }}>
+          {label}
+        </button>)}
+    </nav>
+    {error && <p className="muted pequeño" role="status">No se pudo actualizar el historial. Volveremos a intentarlo.</p>}
+    <ul className="lista">
+      {!entries.length && <li className="vacio">{loading ? 'Cargando historial…' : error ? 'Historial no disponible por ahora.' : 'No hay registros en esta vista.'}</li>}
+      {entries.map((entry) => <li key={entry.key}>
+        <button className="fila-lista" onClick={() => setSelected(entry)}>
+          <div><strong>{entry.nombre}</strong><small>{historyDate.format(new Date(entry.startsAt))}</small><small>{entry.origen}</small></div>
+          <div className="derecha"><strong>{mxn(entry.anticipo)}</strong>
+            <div className="chips"><Chip estado={entry.estadoCita} mapa={ESTADO_CITA} /><Chip estado={entry.estadoPago} mapa={ESTADO_PAGO} /></div>
+          </div>
+        </button>
+      </li>)}
+    </ul>
+    {data?.filter === filter && data.cursor && <button className="btn secundario" disabled={loading}
+      onClick={() => { setLoading(true); setPages((count) => count + 1); }}>{loading ? 'Cargando…' : 'Ver más'}</button>}
+    {selected && <PanelLateral cerrar={() => setSelected(null)}>
+      <p className="sub">{historyDate.format(new Date(selected.startsAt))} · CDMX</p>
+      <h2>{selected.nombre}</h2>
+      {selected.telefono && <p className="muted">📱 {selected.telefono}</p>}
+      <div className="chips"><Chip estado={selected.estadoCita} mapa={ESTADO_CITA} /><Chip estado={selected.estadoPago} mapa={ESTADO_PAGO} /></div>
+      <dl className="resumen"><dt>Origen</dt><dd>{selected.origen}</dd><dt>Anticipo</dt><dd>{mxn(selected.anticipo)}</dd></dl>
+      <h3>Línea de tiempo</h3>
+      <ol className="lista history-timeline">
+        {selected.events.map((event, index) => <li key={index} className="fila-lista estatica">
+          <div><strong>{event.label}</strong>{event.note && <small>{event.note}</small>}</div>
+          {event.at ? <time className="muted pequeño" dateTime={event.at}>{historyDate.format(new Date(event.at))}</time>
+            : <small className="muted">Sin hora registrada</small>}
+        </li>)}
+      </ol>
+    </PanelLateral>}
+  </>;
+}
+
+function Detalle({ cita, paciente, dia, slot, cerrar }) {
   const saldo = consultorio.precioServicio - cita.anticipo;
   const c = cita.estadoCita;
   return (
-    <div className="capa" onClick={cerrar}>
-      <aside className="panel-lateral" onClick={(e) => e.stopPropagation()}>
-        <button className="cerrar" onClick={cerrar} aria-label="Cerrar">×</button>
+    <PanelLateral cerrar={cerrar}>
         <p className="sub">{fechaLarga(dia)} · {slot?.inicio}–{slot?.fin}</p>
         <h2>{paciente.nombre}</h2>
-        <p className="muted">📱 {telefonoBonito(paciente.telefono)}</p>
+        <p className="muted">📱 {paciente.telefono}</p>
         <div className="chips"><Chip estado={c} mapa={ESTADO_CITA} /><Chip estado={cita.estadoPago} mapa={ESTADO_PAGO} /></div>
 
         {cita.nota && <p className="nota">{cita.nota}</p>}
@@ -233,7 +480,7 @@ function Detalle({ cita, paciente, dia, slot, cerrar, actualizar, cobrarSaldo })
           <div className="caja">
             <strong>Horario retenido</strong>
             <p>Quedan {Math.floor((cita.retencionRestanteMin ?? 360) / 60)} h {(cita.retencionRestanteMin ?? 360) % 60} min antes de liberarlo.
-              A las 4 h se envía un recordatorio por WhatsApp, una sola vez.</p>
+              </p>
             <p className="muted">La cita se confirma sola cuando pey avisa que el pago llegó.</p>
           </div>
         )}
@@ -242,202 +489,103 @@ function Detalle({ cita, paciente, dia, slot, cerrar, actualizar, cobrarSaldo })
         )}
 
         <div className="acciones-col">
-          {(c === 'confirmada' || c === 'atendida') && !cita.saldoPagado && !cita.saldoSolicitado && (
-            <button className="btn primario grande" onClick={cobrarSaldo}>Cobrar saldo de {mxn(saldo)} con CoDi</button>
-          )}
-          {c === 'confirmada' && (
+          {c === 'confirmada' && <>
+            <button className="btn primario grande" disabled>Cobrar saldo de {mxn(saldo)} con CoDi · Próximamente</button>
             <div className="fila">
-              <button className="btn secundario" onClick={() => actualizar({ estadoCita: 'atendida' })}>Llegó</button>
-              <button className="btn secundario" onClick={() => actualizar({ estadoCita: 'inasistencia' })}>No asistió</button>
+              <button className="btn secundario" disabled>Llegó · Próximamente</button>
+              <button className="btn secundario" disabled>No asistió · Próximamente</button>
             </div>
-          )}
-          {['propuesta', 'pendiente_pago', 'confirmada'].includes(c) && (
-            <button className="btn secundario">Proponer otro horario</button>
-          )}
-          {c === 'pendiente_pago' && <button className="btn secundario">Reenviar solicitud de pago</button>}
-          {cita.estadoPago === 'devolucion_pendiente' && (
-            <>
-              <button className="btn secundario">Ofrecer reagendar conservando anticipo</button>
-              <button className="btn secundario" onClick={() => actualizar({ estadoPago: 'devuelto' })}>Marcar devolución hecha</button>
-            </>
-          )}
-          {cita.estadoPago === 'revision' && (
-            <button className="btn secundario">Revisar pago tardío</button>
-          )}
-          {['propuesta', 'pendiente_pago', 'confirmada'].includes(c) && (
-            <button className="btn peligro" onClick={() => actualizar({
-              estadoCita: 'cancelada',
-              estadoPago: cita.estadoPago === 'pagado' ? 'devolucion_pendiente' : cita.estadoPago,
-              nota: cita.estadoPago === 'pagado' ? 'Cancelada por el consultorio: ofrecer reagendar o gestionar devolución.' : undefined,
-            })}>Cancelar cita</button>
-          )}
+          </>}
+          {['pendiente_pago', 'confirmada'].includes(c) && <>
+            <button className="btn secundario" disabled>Proponer otro horario · Próximamente</button>
+            <button className="btn peligro" disabled>Cancelar cita · Próximamente</button>
+          </>}
         </div>
-      </aside>
-    </div>
+    </PanelLateral>
   );
 }
 
-function ModalCobro({ pacientes, pacienteId, citaId, concepto: conceptoInicial = '', monto: montoInicial = '', cerrar, enviar }) {
-  const [pid, setPid] = useState(pacienteId || pacientes[0].id);
-  const [concepto, setConcepto] = useState(conceptoInicial);
-  const [monto, setMonto] = useState(String(montoInicial));
-  const [demo, setDemo] = useState(false);
-  const [canal, setCanal] = useState('push');
-  const [enviado, setEnviado] = useState(false);
-  const p = pacientes.find((x) => x.id === pid);
-  const montoFinal = demo ? 0.01 : Number(monto);
-  const valido = concepto.trim() && montoFinal > 0;
+function ModalCobroProcedimiento({ cerrar, enviado }) {
+  const [phone, setPhone] = useState('');
+  const [concept, setConcept] = useState('');
+  const [amount, setAmount] = useState('0.01');
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const parsedAmount = amount.trim().replace(',', '.');
+  const amountCents = Math.round(Number(parsedAmount) * 100);
+  const ready = phone.trim() && concept.trim() && key.trim() && /^\d+(\.\d{1,2})?$/.test(parsedAmount)
+    && amountCents >= 1 && amountCents <= 100000000;
 
-  return (
-    <div className="capa" onClick={cerrar}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <button className="cerrar" onClick={cerrar} aria-label="Cerrar">×</button>
-        {!enviado ? (
-          <>
-            <h2>Cobrar con CoDi</h2>
-            <label>Paciente
-              <select value={pid} onChange={(e) => setPid(e.target.value)} disabled={!!citaId}>
-                {pacientes.map((x) => <option key={x.id} value={x.id}>{x.nombre} · {telefonoBonito(x.telefono)}</option>)}
-              </select>
-            </label>
-            <label>Concepto
-              <input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Ej. Resina en molar" />
-            </label>
-            <label>Monto (MXN)
-              <input type="number" min="1" value={demo ? '0.01' : monto} disabled={demo} onChange={(e) => setMonto(e.target.value)} />
-            </label>
-            <label className="check"><input type="checkbox" checked={demo} onChange={(e) => setDemo(e.target.checked)} /> Cobro de demostración: $0.01 MXN real</label>
+  async function send(event) {
+    event.preventDefault();
+    if (!ready || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/panel/office-charges', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key.trim()}` },
+        body: JSON.stringify({ phone, concept, amountCents }),
+      });
+      const result = await response.json();
+      if (response.ok) enviado(result.maskedPhone);
+      else setError({
+        unauthorized: 'La clave del consultorio no coincide.',
+        invalid_request: 'Revisa el número mexicano, el concepto y el importe.',
+        contact_window_closed: 'Pide al paciente que escriba al WhatsApp del consultorio antes de enviar el cobro.',
+      }[result.error] || 'No pudimos confirmar el envío. Revisa el chat antes de repetirlo.');
+    } catch {
+      setError('No pudimos confirmar el envío. Revisa el chat antes de repetirlo.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
-            <div className="canales">
-              <button className={`canal ${canal === 'push' ? 'activo' : ''}`} onClick={() => setCanal('push')}>
-                <strong>📲 Al celular del paciente</strong>
-                <small>Le llega la solicitud a su app bancaria al {telefonoBonito(p.telefono)}</small>
-              </button>
-              <button className={`canal ${canal === 'qr' ? 'activo' : ''}`} onClick={() => setCanal('qr')}>
-                <strong>🔳 QR en esta pantalla</strong>
-                <small>El paciente lo escanea con su banco aquí en el consultorio</small>
-              </button>
-            </div>
-
-            <button className="btn primario grande" disabled={!valido}
-              onClick={() => { enviar({ pacienteId: pid, citaId, concepto, monto: montoFinal, canal }); setEnviado(true); }}>
-              {canal === 'push' ? 'Enviar solicitud' : 'Generar QR'} por {mxn(montoFinal || 0)}
-            </button>
-          </>
-        ) : (
-          <div className="esperando">
-            {canal === 'qr' ? (
-              <div className="qr-lugar">El QR dinámico de pey aparece aquí</div>
-            ) : (
-              <div className="pulso">📲</div>
-            )}
-            <h2>{canal === 'qr' ? 'Muestra este QR al paciente' : `Solicitud enviada a ${p.nombre.split(' ')[0]}`}</h2>
-            <p>{concepto} · <strong>{mxn(montoFinal)}</strong></p>
-            <p className="muted"><span className="spinner" /> Esperando la confirmación de pey. El cobro se marca como pagado solo cuando llega el aviso verificado.</p>
-            <button className="btn secundario" onClick={cerrar}>Listo, seguir trabajando</button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  return <div className="capa" onClick={busy ? undefined : cerrar}>
+    <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={send}>
+      <button type="button" className="cerrar" aria-label="Cerrar" disabled={busy} onClick={cerrar}>×</button>
+      <h2>Cobrar por WhatsApp</h2>
+      <label>WhatsApp del paciente (+52)<input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="55 1234 5678" /></label>
+      <label>Servicio o concepto<input maxLength={80} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="Ej. Limpieza dental" /></label>
+      <label>Monto en MXN<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+      <label>Clave del consultorio<input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} /></label>
+      <p className="muted pequeño">El paciente recibirá el concepto, el total y un botón para pagar con CoDi.</p>
+      {error && <p role="alert">{error}</p>}
+      <button className="btn primario grande" disabled={!ready || busy}>{busy ? 'Enviando…' : 'Enviar cobro por WhatsApp'}</button>
+    </form>
+  </div>;
 }
 
-function ModalCita({ dias, citas, pacientes, dia = 0, slot, pacienteId, cerrar, crear }) {
-  const [busqueda, setBusqueda] = useState('');
-  const [pid, setPid] = useState(pacienteId || null);
-  const [nuevoNombre, setNuevoNombre] = useState('');
-  const [d, setD] = useState(dia);
-  const [s, setS] = useState(slot ?? null);
-  const [anticipo, setAnticipo] = useState(consultorio.anticipos[1]);
-  const [otro, setOtro] = useState('');
-
-  const digitos = busqueda.replace(/\D/g, '');
-  const encontrados = busqueda
-    ? pacientes.filter((p) => p.telefono.includes(digitos || '¬') || p.nombre.toLowerCase().includes(busqueda.toLowerCase()))
-    : [];
-  const esNuevo = !pid && digitos.length === 10 && !pacientes.some((p) => p.telefono === digitos);
-  const ocupados = new Set(citas.filter((c) => c.dia === d && !['cancelada', 'vencida'].includes(c.estadoCita)).map((c) => c.slot));
-  bloqueos.filter((b) => b.dia === d).forEach((b) => ocupados.add(b.slot));
-  const montoFinal = anticipo === 'otro' ? Number(otro) : anticipo;
-  const pacienteListo = pid || (esNuevo && nuevoNombre.trim());
-  const valido = pacienteListo && s !== null && montoFinal > 0;
-  const elegido = pacientes.find((p) => p.id === pid);
-
-  return (
-    <div className="capa" onClick={cerrar}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <button className="cerrar" onClick={cerrar} aria-label="Cerrar">×</button>
-        <h2>Nueva cita · {consultorio.servicio}</h2>
-
-        {elegido ? (
-          <div className="elegido">
-            <span><strong>{elegido.nombre}</strong> · {telefonoBonito(elegido.telefono)}</span>
-            {!pacienteId && <button className="link" onClick={() => setPid(null)}>Cambiar</button>}
-          </div>
-        ) : (
-          <>
-            <label>Paciente (teléfono o nombre)
-              <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="55 1234 5678" inputMode="search" />
-            </label>
-            {encontrados.map((p) => (
-              <button key={p.id} className="resultado" onClick={() => setPid(p.id)}>{p.nombre} · {telefonoBonito(p.telefono)}</button>
-            ))}
-            {esNuevo && (
-              <label>Paciente nuevo, ¿cómo se llama?
-                <input value={nuevoNombre} onChange={(e) => setNuevoNombre(e.target.value)} placeholder="Nombre completo" />
-              </label>
-            )}
-          </>
-        )}
-
-        <label>Día</label>
-        <div className="opciones">
-          {dias.map((x, i) => (
-            <button key={i} className={`opcion ${d === i ? 'activo' : ''}`} onClick={() => { setD(i); setS(null); }}>{fechaCorta(x)}</button>
-          ))}
-        </div>
-        <label>Horario (45 min)</label>
-        <div className="opciones">
-          {slotsDelDia(dias[d]).map((x, i) => (
-            <button key={i} disabled={ocupados.has(i)} className={`opcion ${s === i ? 'activo' : ''}`} onClick={() => setS(i)}>{x.inicio}</button>
-          ))}
-        </div>
-        <p className="muted pequeño">Las citas con anticipo deben ser a más de 6 horas de distancia.</p>
-
-        <label>Anticipo</label>
-        <div className="opciones">
-          {consultorio.anticipos.map((a) => (
-            <button key={a} className={`opcion ${anticipo === a ? 'activo' : ''}`} onClick={() => setAnticipo(a)}>{mxn(a)}</button>
-          ))}
-          <button className={`opcion ${anticipo === 0.01 ? 'activo' : ''}`} onClick={() => setAnticipo(0.01)}>Demo $0.01</button>
-          <button className={`opcion ${anticipo === 'otro' ? 'activo' : ''}`} onClick={() => setAnticipo('otro')}>Otro</button>
-        </div>
-        {anticipo === 'otro' && <input type="number" min="1" value={otro} onChange={(e) => setOtro(e.target.value)} placeholder="Monto en MXN" />}
-
-        <button className="btn primario grande" disabled={!valido}
-          onClick={() => crear({
-            paciente: elegido || { nombre: nuevoNombre.trim(), telefono: digitos },
-            dia: d, slot: s, anticipo: montoFinal,
-          })}>
-          Enviar propuesta por WhatsApp
-        </button>
-        <p className="muted pequeño">El paciente acepta, rechaza o pide otro horario. La cita se confirma cuando pague el anticipo.</p>
-      </div>
-    </div>
-  );
-}
-
-function Cobros({ citas, cobros, paciente, dias, abrirCita, nuevo }) {
-  const [filtro, setFiltro] = useState('atencion');
+function Cobros({ citas, paciente, dias, abrirCita, nuevo }) {
+  const [filtro, setFiltro] = useState('pagados');
+  const [independientes, setIndependientes] = useState([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    let busy = false;
+    async function cargar() {
+      if (busy || document.visibilityState !== 'visible') return;
+      busy = true;
+      try {
+        const response = await fetch('/api/panel/office-charges', { cache: 'no-store', signal: controller.signal });
+        if (response.ok && !controller.signal.aborted) setIndependientes((await response.json()).charges);
+      } catch { /* Keep the last loaded list. */ }
+      finally { busy = false; }
+    }
+    cargar();
+    const timer = setInterval(cargar, 5000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, []);
   const filas = [
     ...citas.filter((c) => c.estadoPago !== 'sin_anticipo').map((c) => ({
       id: c.id, citaId: c.id, nombre: paciente(c.pacienteId).nombre,
       concepto: `Anticipo · ${fechaCorta(dias[c.dia])} ${slotsDelDia(dias[c.dia])[c.slot]?.inicio}`,
       monto: c.anticipo, estado: c.estadoPago,
     })),
-    ...cobros.map((k) => ({
-      id: k.id, nombre: paciente(k.pacienteId).nombre, concepto: k.concepto, monto: k.monto,
-      estado: k.estadoPago, canal: k.canal,
+    ...independientes.map((charge) => ({
+      id: charge.id, nombre: 'Cobro por procedimiento',
+      concepto: historyDate.format(new Date(charge.created_at)),
+      monto: charge.amount_cents / 100, estado: charge.paid_at ? 'pagado' : 'pendiente',
     })),
   ];
   const grupos = {
@@ -475,7 +623,7 @@ function Cobros({ citas, cobros, paciente, dias, abrirCita, nuevo }) {
   );
 }
 
-function Pacientes({ pacientes, citas, cobros, cobrar, agendar }) {
+function Pacientes({ pacientes, citas }) {
   const [q, setQ] = useState('');
   const digitos = q.replace(/\D/g, '');
   const lista = pacientes.filter((p) => !q || (digitos && p.telefono.includes(digitos)) || p.nombre.toLowerCase().includes(q.toLowerCase()));
@@ -484,16 +632,16 @@ function Pacientes({ pacientes, citas, cobros, cobrar, agendar }) {
       <header className="encabezado"><div><h1>Pacientes</h1><p className="sub">{pacientes.length} registrados</p></div></header>
       <input className="buscador" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar por teléfono o nombre" />
       <ul className="lista">
+        {lista.length === 0 && <li className="vacio">Nada por aquí.</li>}
         {lista.map((p) => {
           const susCitas = citas.filter((c) => c.pacienteId === p.id);
-          const pagado = susCitas.filter((c) => c.estadoPago === 'pagado').reduce((s, c) => s + c.anticipo, 0)
-            + cobros.filter((k) => k.pacienteId === p.id && k.estadoPago === 'pagado').reduce((s, k) => s + k.monto, 0);
+          const pagado = susCitas.filter((c) => c.estadoPago === 'pagado').reduce((s, c) => s + c.anticipo, 0);
           return (
             <li key={p.id} className="fila-lista estatica">
-              <div><strong>{p.nombre}</strong><small>{telefonoBonito(p.telefono)} · {susCitas.length} citas · {mxn(pagado)} pagado</small></div>
+              <div><strong>{p.nombre}</strong><small>{p.telefono} · {susCitas.length} citas · {mxn(pagado)} pagado</small></div>
               <div className="derecha fila">
-                <button className="btn secundario chico" onClick={() => agendar(p)}>Agendar</button>
-                <button className="btn secundario chico" onClick={() => cobrar(p)}>Cobrar</button>
+                <button className="btn secundario chico" disabled>Agendar · Próximamente</button>
+                <button className="btn secundario chico" disabled>Cobrar · Próximamente</button>
               </div>
             </li>
           );
@@ -514,7 +662,7 @@ function Ajustes() {
             <li key={d}><span>{DIAS_SEMANA[d]}</span><span>{horario[d] ? `${horario[d][0]} – ${horario[d][1]}` : 'Cerrado'}</span></li>
           ))}
         </ul>
-        <button className="btn secundario chico">Agregar bloqueo</button>
+        <button className="btn secundario chico" disabled>Agregar bloqueo · Próximamente</button>
       </section>
       <section className="tarjeta">
         <h3>Anticipo de {consultorio.servicio.toLowerCase()}</h3>

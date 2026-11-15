@@ -4,11 +4,12 @@ export default function Home() {
   return (
     <main style={{ maxWidth: 620, margin: '64px auto', padding: '0 24px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.6 }}>
       <h1>Agenda una valoración dental</h1>
-      <p>Elige una cita de 45 minutos por WhatsApp. En esta demo, el anticipo es de <strong>$0.01 MXN</strong> y se paga con CoDi.</p>
-      <p><a href={bookingChat}>Abrir WhatsApp para agendar</a></p>
-      <p>Envía el mensaje que aparece en WhatsApp para solicitar el formulario. La cita se confirma cuando recibimos el pago.</p>
-      <hr />
-      <p><a href="/panel">Ver la agenda del consultorio</a></p>
+      <ol>
+        <li><a href={bookingChat}>Abrir WhatsApp</a> y enviar el mensaje preparado.</li>
+        <li>Elegir una fecha y hora en el formulario que llega al chat.</li>
+        <li>Pagar el anticipo de <strong>$0.01 MXN</strong> con CoDi. Es un pago real y no se devuelve.</li>
+        <li><a href="/panel">Ver la cita en la agenda</a>. El estado cambia a Confirmada cuando pey avisa que recibió el pago.</li>
+      </ol>
     </main>
   );
 }

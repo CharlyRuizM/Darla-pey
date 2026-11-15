@@ -1,3 +1,7 @@
+import { mexicanWhatsApp } from '../../../../lib/whatsapp-number.mjs';
+import { handleReschedule, rescheduleAction } from '../../../../lib/paid-reschedule.mjs';
+import { GET as availability } from '../../availability/route.js';
+import { invitationDb, replyToInvitation, uuidPattern } from '../../../../lib/panel-invitations.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createBookingFlowToken, readBookingFlowToken } from '../../../../lib/whatsapp-flow-token.mjs';
 
@@ -21,6 +25,22 @@ export async function POST(request) {
   let body;
   try { body = JSON.parse(raw.toString('utf8')); } catch { return new Response(null, { status: 400 }); }
   const message = body?.message;
+  if (request.headers.get('x-webhook-event') !== 'whatsapp.message.received'
+    || body?.phone_number_id !== numberId || typeof message?.id !== 'string'
+    || !/^([1-9][0-9]{6,14})$/.test(message.from || '')) {
+    return new Response(null, { status: 204 });
+  }
+  const inbound = Number(message.timestamp) * 1000;
+  if (mexicanWhatsApp(message.from) && Number.isFinite(inbound) && inbound > 0 && inbound <= Date.now()) {
+    await invitationDb('rpc/record_panel_whatsapp_contact', 'POST', {
+      contact_phone: message.from.slice(-10), contact_recipient: message.from,
+      inbound_at: new Date(inbound).toISOString(),
+    }).catch(() => undefined);
+  }
+  const buttonId = message.interactive?.button_reply?.id || message.button?.payload || message.interactive?.list_reply?.id;
+  const reschedule = rescheduleAction(buttonId);
+  const invitationReply = typeof buttonId === 'string' && /^inv-(accept|other|reject|bank|link):(.+)$/.exec(buttonId);
+  const validInvitation = invitationReply && uuidPattern.test(invitationReply[2]);
   const text = message?.text?.body?.trim().toLowerCase().replace(/[.!]+$/, '');
   const bookingRequest = (message?.type === 'text' && text === 'quiero agendar una valoración dental')
     || (message?.type === 'interactive' && message.interactive?.button_reply?.id === 'pey-rebook');
@@ -34,11 +54,7 @@ export async function POST(request) {
       // Ignore responses unrelated to this booking Flow.
     }
   }
-  if (request.headers.get('x-webhook-event') !== 'whatsapp.message.received'
-    || body?.phone_number_id !== numberId || (!bookingRequest && !completedBooking)
-    || typeof message.id !== 'string' || !/^52(?:1)?[0-9]{10}$/.test(message.from || '')) {
-    return new Response(null, { status: 204 });
-  }
+  if ((!bookingRequest || !mexicanWhatsApp(message.from)) && !completedBooking && !validInvitation && !reschedule) return new Response(null, { status: 204 });
 
   try {
     const claim = await fetch(new URL('/rest/v1/kapso_booking_invites?on_conflict=message_id', SUPABASE_URL), {
@@ -66,6 +82,16 @@ export async function POST(request) {
       if (receipt.ok) await new Promise((resolve) => setTimeout(resolve, 600));
     } catch {
       // The invitation should still go out when the read receipt fails.
+    }
+
+    if (reschedule) {
+      await handleReschedule(reschedule, message.from, availability);
+      return new Response(null, { status: 204 });
+    }
+
+    if (validInvitation) {
+      await replyToInvitation(invitationReply[2], invitationReply[1], message.from);
+      return new Response(null, { status: 204 });
     }
 
     if (completedBooking) {

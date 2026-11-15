@@ -209,3 +209,16 @@ label.check { flex-direction: row; align-items: center; font-weight: 500; }
   .capa:has(.modal) { align-items: flex-end; padding: 0; }
   .modal { border-radius: 18px 18px 0 0; }
 }
+
+.proposal-phone-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.proposal-phone-row input { flex: 1 1 160px; min-width: 0; }
+.proposal-countries { margin-top: 8px; border: 1px solid var(--borde); border-radius: 10px; padding: 8px; }
+.proposal-countries input { width: 100%; }
+.proposal-countries ul { list-style: none; padding: 0; margin: 4px 0 0; max-height: 165px; overflow: auto; }
+.proposal-countries .resultado { display: flex; width: 100%; justify-content: space-between; gap: 8px; }
+.proposal-success { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 12px 14px; border-radius: 10px; background: var(--primario-claro); }
+
+.history-timeline time { text-align: right; }
+@media (max-width: 760px) {
+  .nav .nav-item { flex: 1; min-width: 0; padding-inline: 2px; }
+}

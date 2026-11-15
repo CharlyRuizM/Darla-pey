@@ -184,14 +184,21 @@ Cerrar cada etapa con su prueba de aceptación antes de depender de ella para la
 | 5. Recordatorios y cambios | Configurar Cron, plantillas y cambios de cita. Aplicar el recordatorio a las 4 h, el vencimiento a las 6 h y el recordatorio opcional de cita. | Se verifican los cambios de estado y los mensajes sin duplicados. Un pago tardío queda en revisión. |
 | 6. Entrega | Ejecutar el flujo completo, preparar instrucciones, declarar código previo y grabar la demo. | El video de menos de 3 minutos muestra WhatsApp, autorización bancaria y cita confirmada. |
 
-Avance del 14 de noviembre de 2026: API key creada y cuenta receptora preautorizada del evento utilizada para la prueba. El POST de producción a /codi/pn por $0.01 MXN devolvió HTTP 200 con transactionId y codiId. El push llegó al segundo teléfono. El usuario no autorizó el pago porque era de un colega. Pendiente probar la autorización y la confirmación por webhook. Las claves y el secreto del webhook se configuran fuera del repositorio.
+## Cómo probar
 
-El receptor inicial de pey vive en `/api/webhooks/pey` y usa `PEY_WEBHOOK_SECRET`. Se verificó localmente la firma, el rechazo de cuerpo alterado y la ventana de tiempo. Los eventos autenticados se guardan en Supabase con una clave única por webhook. El receptor responde 204 si Supabase aceptó el evento y 503 si no pudo guardarlo. Falta aplicar la migración y verificar contra una instancia real. Aún falta crear el proyecto Next.js, desplegar en Cloudflare y registrar la URL en pey.
+1. Abre la [demo pública](https://pey-hackathon.ingecarlosrm.workers.dev/) y pulsa **Abrir WhatsApp**. Envía el mensaje preparado al número del consultorio terminado en **8284**.
+2. Abre el formulario de WhatsApp, elige una fecha y hora y solicita un cobro por push o por link.
+3. Paga el anticipo de **$0.01 MXN** con CoDi. Es un pago real y no se devuelve.
+4. Revisa el cambio de estado en la [agenda pública](https://pey-hackathon.ingecarlosrm.workers.dev/panel) y espera el aviso de confirmación en WhatsApp. La agenda muestra únicamente un teléfono enmascarado cuando está disponible.
 
-Para activar el almacenamiento, aplicar la migración de `supabase/migrations` y configurar `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `PEY_WEBHOOK_SECRET` en el servidor. La clave de rol de servicio es exclusiva del backend.
+Se verificaron pagos CoDi de producción por push y link, la recepción de sus webhooks y la conciliación de citas en Supabase. La agenda consulta esas citas en tiempo real. Las acciones sin integración aparecen como **Próximamente**.
 
-## Acceso para jueces
+## Código previo
 
-La portada abre WhatsApp con el mensaje «Quiero agendar una valoración dental» al número de demo terminado en 8284. Falta conectar ese mensaje entrante a una respuesta automática con el Flow publicado. El script de invitación existente usa modo borrador y requiere una sesión de mensajería habilitada para el destinatario.
+El número de WhatsApp y el proyecto Kapso ya existían antes del hackatón. El Flow dental, el código de reserva y pago, la conciliación, las notificaciones y el panel de este repositorio se prepararon para la demo.
 
-El panel todavía simula la propuesta. Para habilitar el envío real, el backend debe emitir una invitación vinculada al destinatario, horario y monto de la propuesta. Si el consultorio inicia la conversación fuera de la ventana de atención de WhatsApp, usar una plantilla aprobada. Restringir el envío a operadores del panel y ofrecer a los jueces acceso controlado para probar con su propio número. La demo cobra $0.01 MXN.
+### Invitaciones desde el consultorio
+
+En la agenda pública, abre **Nueva cita**, elige un horario e ingresa tu propio número. Selecciona el anticipo. El valor predeterminado para la prueba es **$0.01 MXN**; también puedes elegir $100, $200, $300 u otro monto de hasta $600. El pago es real. La plantilla aprobada permite recibir la propuesta sin haber escrito al consultorio. Si la plantilla deja de estar disponible, el mensaje interactivo requiere una conversación reciente.
+
+La propuesta aparece en la agenda cuando Kapso acepta el envío. El horario se reserva al aceptar y la cita se confirma al recibir el pago verificado por pey.

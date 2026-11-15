@@ -38,7 +38,10 @@ export async function POST(request) {
       const message = kind === 'expired'
         ? { type: 'interactive', interactive: { type: 'button', body: { text: body },
           action: { buttons: [{ type: 'reply', reply: { id: 'pey-rebook', title: 'Ver horarios' } }] } } }
-        : { type: 'text', text: { body } };
+        : kind === 'confirmed'
+          ? { type: 'interactive', interactive: { type: 'button', body: { text: body },
+            action: { buttons: [{ type: 'reply', reply: { id: 'pey-move:' + appointment_id, title: 'Reagendar' } }] } } }
+          : { type: 'text', text: { body } };
       try {
         const sent = await fetch('https://api.kapso.ai/meta/whatsapp/v23.0/1142240392297039/messages', {
           method: 'POST', signal: AbortSignal.timeout(5000),
